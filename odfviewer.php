@@ -1,13 +1,14 @@
 <?php
 
 /**
- * Open Document Viewer plugin
+ * Open Document Viewer plugin + Binary XLS viewer using xlhtml shell command
  *
  * Render Open Documents directly in the preview window
  * by using the WebODF library by Tobias Hintze http://webodf.org/
  *
- * @version 0.2
+ * @version 0.4
  * @author Thomas Bruederli <bruederli@kolabsys.com>
+ * @author Gergely Nagy <gna@r-us.hu>
  *
  * Copyright (C) 2011, Kolab Systems AG
  *
@@ -30,7 +31,12 @@ class odfviewer extends rcube_plugin
   
   private $tempdir  = 'plugins/odfviewer/files/';
   private $tempbase = 'plugins/odfviewer/files/';
-  
+
+  private $xlhtcmd = '';
+  private $xls_mimetypes = array(
+    'application/vnd.ms-excel',
+  );
+
   private $odf_mimetypes = array(
     'application/vnd.oasis.opendocument.chart',
     'application/vnd.oasis.opendocument.chart-template',
@@ -52,6 +58,9 @@ class odfviewer extends rcube_plugin
     $this->tempdir = $this->home . '/files/';
     $this->tempbase = $this->urlbase . 'files/';
 
+    // we need xlhtml command
+    $this->xlhtcmd = trim(shell_exec('which xlhtml'));
+
     // webODF only supports IE9 or higher
     $ua = new rcube_browser;
     if ($ua->ie && $ua->ver < 9)
@@ -62,7 +71,13 @@ class odfviewer extends rcube_plugin
       $mimetypes = $rcmail->config->get('client_mimetypes', 'text/plain,text/html,text/xml,image/jpeg,image/gif,image/png,application/x-javascript,application/pdf,application/x-shockwave-flash');
       if (!is_array($mimetypes))
         $mimetypes = explode(',', $mimetypes);
-      $rcmail->config->set('client_mimetypes', array_merge($mimetypes, $this->odf_mimetypes));
+
+      // If xlhtml is present and is executable we also add the binary-XLS mimetype to the preview list
+        if ( @is_executable($this->xlhtcmd) ) {
+            $rcmail->config->set('client_mimetypes', array_merge($mimetypes, $this->odf_mimetypes, $this->xls_mimetypes));
+        } else {
+            $rcmail->config->set('client_mimetypes', array_merge($mimetypes, $this->odf_mimetypes));
+        }
     }
 
     $this->add_hook('message_part_get', array($this, 'get_part'));
@@ -95,15 +110,30 @@ class odfviewer extends rcube_plugin
           // remember tempfiles in session to clean up on logout
           $_SESSION['odfviewer']['tempfiles'][] = $fn;
         }
-        
-        // send webODF viewer page
-        $html = file_get_contents($this->home . '/odf.html');
-        header("Content-Type: text/html; charset=" . 'RCMAIL_CHARSET');
-        echo strtr($html, array(
-          '%%DOCROOT%%' => $this->urlbase,
-          '%%DOCURL%%' => $this->tempbase . $fn, # $_SERVER['REQUEST_URI'].'&_load=1',
-          ));
-        $args['abort'] = true;
+         // let us be sure twice we have xlhtml working
+        if ( $suffix == '.xls' ) {
+            if ( @is_executable($this->xlhtcmd) ) {
+                $xlhtml = shell_exec($this->xlhtcmd . ' -c -nh '.$tempfn.' | /bin/grep -vE "Last Updated with |Created with|&nbsp;<br>" | /bin/sed -e "s/<HR>//g"');
+            } else {
+                $xlhtml = "<h1 style='color: red;'>Cannot parse ".$args['part']->filename." without xlhtml command.<br>please install xlhtml to your webserver</h1>";
+            }
+            $html = file_get_contents($this->home . '/xls.html');
+            header("Content-Type: text/html; charset=" . 'RCMAIL_CHARSET');
+            echo strtr($html, array(
+                '<div id="odf"></div>' => $xlhtml,
+                '%%DOCROOT%%' => $this->urlbase,
+            ));
+            $args['abort'] = true;
+        } else {
+            // send webODF viewer page
+            $html = file_get_contents($this->home . '/odf.html');
+            header("Content-Type: text/html; charset=" . 'RCMAIL_CHARSET');
+            echo strtr($html, array(
+              '%%DOCROOT%%' => $this->urlbase,
+              '%%DOCURL%%' => $this->tempbase . $fn, # $_SERVER['REQUEST_URI'].'&_load=1',
+              ));
+            $args['abort'] = true;
+        }
       }
 /*
       else {
